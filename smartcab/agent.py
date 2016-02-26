@@ -1,7 +1,10 @@
 import random
+from pdb import set_trace
+from collections import defaultdict
 from environment import Agent, Environment
 from planner import RoutePlanner
 from simulator import Simulator
+
 
 class LearningAgent(Agent):
     """An agent that learns to drive in the smartcab world."""
@@ -10,31 +13,69 @@ class LearningAgent(Agent):
         super(LearningAgent, self).__init__(env)  # sets self.env = env, state = None, next_waypoint = None, and a default color
         self.color = 'red'  # override color
         self.planner = RoutePlanner(self.env, self)  # simple route planner to get next_waypoint
+        self.q_table = defaultdict(float)                                                                                                                                         
+        self.A_previous = None
+        self.S_previous = None
+        self.next_waypoint = None
+        self.max_q = defaultdict(tuple)
+        self.alpha = 0.5
+        self.gamma = 0.8
+        self.epsilon = 0.7
         # TODO: Initialize any additional variables here
 
     def reset(self, destination=None):
         self.planner.route_to(destination)
-        # TODO: Prepare for a new trip; reset any variables here, if required
+        self.A_previous = None
+        self.S_previous = None
+        self.next_waypoint = None
 
     def update(self, t):
-        # Gather inputs
-        self.next_waypoint = self.planner.next_waypoint()  # from route planner, also displayed by simulator
-        inputs = self.env.sense(self)
-        deadline = self.env.get_deadline(self)
-
-        # TODO: Update state
-        self.state = [('deadline',deadline),('oncoming',inputs['oncoming']),('light', inputs['light']),
-            ('oncoming',inputs['oncoming']), ('left',inputs['left']), ('right', inputs['right'])]
-        
-        # TODO: Select action according to your policy
         valid_actions = [None, 'forward', 'left', 'right']
-        action = random.choice(valid_actions)
+        rand_act = random.choice(valid_actions)
 
-        # Execute action and get reward
-        reward = self.env.act(self, action)
-        print self.planner.destination
-        # TODO: Learn policy based on state, action, reward
-        print "LearningAgent.update(): deadline = {}, inputs = {}, action = {}, reward = {}".format(deadline, inputs, action, reward)  # [debug]
+        # Select action according to epsilon greedy algorithm
+        if len(self.max_q[self.S_previous]) > 0 and random.random < self.epsilon:
+            # pick argmax{a in A} Q(s,a)
+            action = self.max_q[self.S_previous][1]
+        else:
+            # Pick random direction with P==(1-epsilon)
+            action = rand_act
+        
+        # Take an action, get a reward
+        self.reward_previous = self.env.act(self, action)
+
+        # Update state
+        self.last_waypoint = self.next_waypoint
+        self.next_waypoint = self.planner.next_waypoint()   # from route planner, also displayed by simulator
+        deadline = self.env.get_deadline(self)
+        inputs = self.env.sense(self)
+        self.state = (('light', inputs['light']),('waypoint',self.next_waypoint))
+            #('oncoming',inputs['oncoming']), ('left',inputs['left']), ('right', inputs['right']))
+            
+        if len(self.max_q[self.state]) == 0:
+            MAX_Q = 0
+        else:
+            MAX_Q = self.max_q[self.state][0]
+            
+        
+        # Calculate Q-value
+        q_sa= self.q_table[(self.S_previous,self.A_previous)]
+        # Q(s,a) <- Q(s,a) + alpha[r_prime + gamma*max_{a_prime} Q(s_prime,a_prime) - Q(s,a)]
+        self.q_table[(self.S_previous,self.A_previous)] = q_sa + self.alpha*(self.reward_previous + self.gamma*MAX_Q - q_sa)
+        
+        # Store the biggest q value for this state (along with the action that caused the large q)
+        if MAX_Q  <  self.q_table[(self.S_previous,self.A_previous)]:
+            self.max_q[self.S_previous]  =  (self.q_table[(self.S_previous,self.A_previous)],self.A_previous)
+            
+
+        self.A_previous = action
+        self.S_previous = self.state
+        print self.S_previous, action
+        print self.reward_previous
+        print deadline
+        print '-'*10
+        #set_trace()        
+        #print "LearningAgent.update(): deadline = {}, inputs = {}, action = {}, reward = {}".format(deadline, inputs, action, self.reward)  # [debug]
 
 
 
@@ -44,11 +85,11 @@ def run():
     # Set up environment and agent
     e = Environment()  # create environment (also adds some dummy traffic)
     a = e.create_agent(LearningAgent)  # create agent
-    e.set_primary_agent(a, enforce_deadline=False)  # set agent to track
+    e.set_primary_agent(a, enforce_deadline=True)  # set agent to track
 
     # Now simulate it
-    sim = Simulator(e, update_delay=1.0)  # reduce update_delay to speed up simulation
-    sim.run(n_trials=10)  # press Esc or close pygame window to quit
+    sim = Simulator(e, update_delay=0)  # reduce update_delay to speed up simulation
+    sim.run(n_trials=100)  # press Esc or close pygame window to quit
 
 
 if __name__ == '__main__':
