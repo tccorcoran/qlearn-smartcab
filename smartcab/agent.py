@@ -36,10 +36,23 @@ class LearningAgent(Agent):
         self.T = 0
 
     def update(self, t):
-        valid_actions = [None, 'forward', 'left', 'right']
-        rand_act = random.choice(valid_actions)
+        """
+        via: https://discussions.udacity.com/t/next-state-action-pair/44902/11
+        Q-learning method 1:
+        1) Sense the environment (see what changes naturally occur in the environment)
+        2) Take an action - get a reward
+        3) Sense the environment (see what changes the action has on the environment)
+        4) Update the Q-table
+        5) Repeat
+        """
+        
+        #1) Sense the environment
         self.next_waypoint = self.planner.next_waypoint()   
         self.S_previous = (('light', self.env.sense(self)['light']),('waypoint',self.next_waypoint))
+        
+        
+        valid_actions = [None, 'forward', 'left', 'right']
+        rand_act = random.choice(valid_actions)
         # Select action according to epsilon greedy algorithm
         if len(self.max_q[self.S_previous]) > 0 and random.random < self.epsilon:
             # pick argmax{a in A} Q(s,a)
@@ -47,25 +60,23 @@ class LearningAgent(Agent):
         else:
             # Pick random direction with P==(1-epsilon)
             action = rand_act
-        
-        # Take an action, get a reward
+        # 2) Take an action - get a reward
         self.reward_previous = self.env.act(self, action)
 
-        # Update state
+        # 3) Sense the environment
         self.last_waypoint = self.next_waypoint
         self.next_waypoint = self.planner.next_waypoint()   # from route planner, also displayed by simulator
         deadline = self.env.get_deadline(self)
-        inputs = self.env.sense(self)
-        self.state = (('light', inputs['light']),('waypoint',self.next_waypoint))
-            #('oncoming',inputs['oncoming']), ('left',inputs['left']), ('right', inputs['right']))
+        self.state = (('light', self.env.sense(self)['light']),('waypoint',self.next_waypoint))
             
+
+            
+        
+        # 4) Update the Q-table
         if len(self.max_q[self.state]) == 0:
             MAX_Q = 0
         else:
             MAX_Q = self.max_q[self.state][0]
-            
-        
-        # Calculate Q-value
         q_sa= self.q_table[(self.S_previous,self.A_previous)]
         # Q(s,a) <- Q(s,a) + alpha[r_prime + gamma*max_{a_prime} Q(s_prime,a_prime) - Q(s,a)]
         self.updateAlpha()
@@ -73,7 +84,7 @@ class LearningAgent(Agent):
         
         # Store the biggest q value for this state (along with the action that caused the large q)
         if MAX_Q  <  self.q_table[(self.S_previous,self.A_previous)]:
-            self.max_q[self.S_previous]  =  (self.q_table[(self.S_previous,self.A_previous)],self.A_previous)
+            self.max_q[self.S_previous]  =  (self.q_table[(self.S_previous,self.A_previous)], self.A_previous)
         
         
         print self.S_previous, action
