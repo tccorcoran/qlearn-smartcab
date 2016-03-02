@@ -1,119 +1,113 @@
 import random
-import math
 from pdb import set_trace
 from collections import defaultdict
+
 from environment import Agent, Environment
 from planner import RoutePlanner
 from simulator import Simulator
 
-
 class LearningAgent(Agent):
     """An agent that learns to drive in the smartcab world."""
-    
+
     def __init__(self, env):
         super(LearningAgent, self).__init__(env)  # sets self.env = env, state = None, next_waypoint = None, and a default color
         self.color = 'red'  # override color
         self.planner = RoutePlanner(self.env, self)  # simple route planner to get next_waypoint
-        self.q_table = defaultdict(float)                                                                                                                                         
-        self.A_previous = None
-        self.S_previous = None
-        self.max_q = defaultdict(tuple)
-        self.alpha_table = defaultdict(tuple)
-        self.T = 0
-        self.gamma = 0.8
-        self.epsilon = 0.75
-        # TODO: Initialize any additional variables here
+
+
+        # Initialize Q value for unseen (state,action) pairs
+        self.Q_naught = 0.0
         
+        self.Q = defaultdict(lambda: self.Q_naught) # the Q-table, unseen (state,action) pairs default to Q_naught=0
+
+        self.gamma = 0.33 # our discount factor of Q(s',a')
+        self.alpha = 0.5 # our learning rate
+        self.epsilon = 0.9  # How likely are we to pick random action / explore new paths?
+
+        self.T = 0 # number of trials performed
+        self.goal_reached = 0 # number of times agent reach goal before deadline
+        self.total_reward = 0 # sum total of reward over all trials
 
     def reset(self, destination=None):
         self.planner.route_to(destination)
-        self.A_previous = None
+        # New trip; reset the previous state,action, and reward
         self.S_previous = None
-        self.next_waypoint = None
-        
-    def updateAlpha(self,t):
-        """ Alpha as a function of how many times
-            we visit a particular state, tending to 0 in the limit
-        """
-        t += 1
-        alpha = 1.0/(t)**2
-        return (alpha,t)
-    
+        self.A_previous = None
+        self.R_previous = None
+        self.T += 1 # update number of trials performed
 
     def update(self, t):
         """
-        via: https://discussions.udacity.com/t/next-state-action-pair/44902/11
-        Q-learning method 1:
-        1) Sense the environment (see what changes naturally occur in the environment)
-        2) Take an action - get a reward
-        3) Sense the environment (see what changes the action has on the environment)
-        4) Update the Q-table
-        5) Repeat
+        Update state, pick an action, get a reward, update Q-table, repeat
         """
-        #set_trace()
-        #1) Sense the environment
-        self.next_waypoint = self.planner.next_waypoint()   
-        self.S_previous = (('light', self.env.sense(self)['light']),('waypoint',self.next_waypoint))
-        
-        
-        valid_actions = [None, 'forward', 'left', 'right']
-        rand_act = random.choice(valid_actions)
-        # Select action according to epsilon greedy algorithm
-        if len(self.max_q[self.S_previous]) > 0 and random.random() < self.epsilon:
-            # pick argmax{a in A} Q(s,a)
-            action = self.max_q[self.S_previous][1]
-        else:
-            # Pick random direction with P==(1-epsilon)
-            action = rand_act
-        # 2) Take an action - get a reward
-        self.reward_previous = self.env.act(self, action)
-
-        # 3) Sense the environment
-        self.next_waypoint = self.planner.next_waypoint()   # from route planner, also displayed by simulator
+        # Gather inputs
+        self.next_waypoint = self.planner.next_waypoint()  # from route planner, also displayed by simulator
         deadline = self.env.get_deadline(self)
+
+        # Current state
         self.state = (('light', self.env.sense(self)['light']),('waypoint',self.next_waypoint))
+
+
+        # act randomly
+        # action = random.choice(Environment.valid_actions)
+
+        # Pick an action based on Q-table
+        Q_sa, action = self.getAction(self.state)
+
+        # Execute action and get reward
+        reward = self.env.act(self, action)
+        
+        # Calculate how successful the agent is at learning the optimal model
+        if self.env.agent_states[self]['location'] == self.env.agent_states[self]['destination']:
+            print "Goal Reached %d out of %d times:"%(self.goal_reached,self.T)
+            self.goal_reached += 1
+        self.total_reward += reward
+
+
+        # Update the Q-table
+        if self.S_previous != None: # Don't update Q-table on the inital move,
+            if (self.S_previous, self.A_previous) not in self.Q:
+                self.Q[(self.S_previous, self.A_previous)] = self.Q_naught # For previously unseen state,action pairs
+
+            Q_sa = self.Q[(self.S_previous,self.A_previous)]
+            Q_max = self.getAction(self.state)[0] # max Q(s',a') over a'
             
-        
-        # Find the max q value of this state through all actions
-        if len(self.max_q[self.state]) == 0:
-            MAX_Q = 0
-        else:
-            MAX_Q = self.max_q[self.state][0]
+            # Q(s,a) <- Q(s,a) + alpha[r' + gamma*max{a'} Q(s',a') - Q(s,a)]
+            # From: Pg. 332 "Foundations of Machine Learning" Mohri, Rostamizadeh, and Talwalker 2012
+            self.Q[(self.S_previous,self.A_previous)] = Q_sa + self.alpha*(self.R_previous + self.gamma*Q_max - Q_sa)
 
-        # Update the learning rate--a fn of number of visits to s
-        if len( self.alpha_table[self.S_previous]) == 0:
-            self.alpha_table[self.S_previous] = self.updateAlpha(1)
-        else:
-            self.alpha_table[self.S_previous] = self.updateAlpha(self.alpha_table[self.S_previous][1])
-        alpha = self.alpha_table[self.S_previous][0]
-        
-        # 4) Update the Q-table
-        q_sa = self.q_table[(self.S_previous,self.A_previous)] # Q(s,a) 
-        # Q(s,a) <- Q(s,a) + alpha[r' + gamma*max{a'} Q(s',a') - Q(s,a)]
-        self.q_table[(self.S_previous,self.A_previous)] = q_sa + alpha*(self.reward_previous + self.gamma*MAX_Q - q_sa)
-        
-        # Store the biggest q value for this state (along with the action that caused the large q, so we can pick that action again in step 2)
-        if MAX_Q  <  self.q_table[(self.S_previous,self.A_previous)]:
-            self.max_q[self.state]  =  (self.q_table[(self.S_previous,self.A_previous)], self.A_previous)
-        
-        
-        print "State: ", self.S_previous, action
-        print "Reward: ", self.reward_previous
-        print "Deadline: ", deadline
-        print "Alpha: ", alpha
-        print "Q-value learned: ", self.q_table[(self.S_previous,self.A_previous)]
-        print '-'*10
-        #set_trace()             
 
+        self.S_previous = self.state
         self.A_previous = action
-        #print self.q_table
-        #print "LearningAgent.update(): deadline = {}, inputs = {}, action = {}, reward = {}".format(deadline, inputs, action, self.reward)  # [debug]
+        self.R_previous = reward
+
+        self.env.status_text +=  "\nGoal Reached {} out of {} times\nTotal Reward: {}".format(self.goal_reached,self.T,self.total_reward,deadline)
+        #print "LearningAgent.update(): deadline = {}, Total Reward = {}, action = {}, reward = {}".format(deadline, self.total_reward, action, reward)  # [debug]
 
 
+    def getAction(self, state):
+        """
+        Find best action for a given state based on lookup of value in Q-table
+        using the epsilon greedy method
+        """
+        best_action = random.choice(Environment.valid_actions)
+        # Pick random direction with P==(1-epsilon) to make sure we explore all state,action pairs (in theory infinitely many times)
+        if random.random() > self.epsilon:
+            Q_max = self.Q[state, best_action]
+        # Otherwise pick the action based on a Q-value lookup
+        else:
+            Q_max = 0
+            for action in Environment.valid_actions:
+                # search through all possible actions given this state
+                q_value = self.Q[state, action]
+                if q_value > Q_max:
+                    Q_max = q_value
+                    best_action = action
+            # In the case where we haven't been to this state before, just use a random action
+        return (Q_max, best_action)
 
 def run():
     """Run the agent for a finite number of trials."""
-
     # Set up environment and agent
     e = Environment()  # create environment (also adds some dummy traffic)
     a = e.create_agent(LearningAgent)  # create agent
